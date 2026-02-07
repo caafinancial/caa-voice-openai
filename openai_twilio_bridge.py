@@ -105,7 +105,7 @@ class OpenAITwilioBridge:
                         "type": "server_vad",
                         "threshold": 0.4,
                         "prefix_padding_ms": 200,
-                        "silence_duration_ms": 300,
+                        "silence_duration_ms": 500,
                         "create_response": True
                     }
                 }
