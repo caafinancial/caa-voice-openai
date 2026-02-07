@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # ============ CALL CENTER BACKGROUND NOISE ============
 # Adds subtle ambient office/call center murmur to make Sarah sound more real
 
-BACKGROUND_NOISE_VOLUME = 0.08  # 8% volume - subtle but present
+BACKGROUND_NOISE_VOLUME = 0.10  # 10% volume - busy office presence
 
 # Mulaw encoding/decoding tables
 MULAW_BIAS = 33
@@ -83,33 +83,50 @@ class BackgroundNoiseGenerator:
         self.noise_buffer = self._generate_ambient_noise(duration_sec=3.0)
         
     def _generate_ambient_noise(self, duration_sec: float) -> bytes:
-        """Generate call center ambient noise (low murmur, keyboard clicks, etc.)."""
+        """Generate busy office ambient noise (typing, murmur, activity)."""
         num_samples = int(self.sample_rate * duration_sec)
         
         # Create layered ambient noise
         t = np.linspace(0, duration_sec, num_samples)
         
-        # Low frequency rumble (HVAC, general room tone) - 60-120Hz
-        rumble = np.sin(2 * np.pi * 80 * t) * 0.1
-        rumble += np.sin(2 * np.pi * 120 * t) * 0.05
+        # Very subtle room tone (less rumble, more natural)
+        room_tone = np.sin(2 * np.pi * 100 * t) * 0.03
         
-        # Brownian noise for "murmur" effect (distant voices)
+        # Pink noise for "busy office murmur" (distant conversations)
         white = np.random.randn(num_samples)
-        brown = np.cumsum(white) / np.sqrt(num_samples)
-        brown = brown / np.max(np.abs(brown)) * 0.15
+        # Simple pink noise approximation
+        pink = np.zeros(num_samples)
+        b = [0.049922035, -0.095993537, 0.050612699, -0.004408786]
+        a = [1, -2.494956002, 2.017265875, -0.522189400]
+        for i in range(3, num_samples):
+            pink[i] = (b[0]*white[i] + b[1]*white[i-1] + b[2]*white[i-2] + b[3]*white[i-3]
+                      - a[1]*pink[i-1] - a[2]*pink[i-2] - a[3]*pink[i-3])
+        pink = pink / (np.max(np.abs(pink)) + 0.001) * 0.12
         
-        # Occasional subtle "activity" sounds (keyboard-like clicks)
+        # More keyboard typing sounds (busy office!)
         clicks = np.zeros(num_samples)
-        click_positions = np.random.choice(num_samples, size=int(duration_sec * 3), replace=False)
+        # ~8-12 clicks per second for busy typing
+        click_positions = np.random.choice(num_samples, size=int(duration_sec * 10), replace=False)
         for pos in click_positions:
-            click_len = min(50, num_samples - pos)
-            clicks[pos:pos+click_len] = np.random.randn(click_len) * 0.02 * np.exp(-np.linspace(0, 5, click_len))
+            click_len = min(40, num_samples - pos)
+            # Sharper click sound
+            clicks[pos:pos+click_len] = np.random.randn(click_len) * 0.04 * np.exp(-np.linspace(0, 8, click_len))
         
-        # Mix layers
-        ambient = rumble + brown + clicks
+        # Occasional distant phone ring (very subtle, every ~2 sec)
+        phone_positions = np.random.choice(num_samples, size=int(duration_sec * 0.5), replace=False)
+        phones = np.zeros(num_samples)
+        for pos in phone_positions:
+            ring_len = min(800, num_samples - pos)  # ~100ms ring
+            ring_t = np.linspace(0, ring_len/self.sample_rate, ring_len)
+            # Dual-tone phone ring (classic office phone)
+            phones[pos:pos+ring_len] = (np.sin(2 * np.pi * 440 * ring_t) + 
+                                        np.sin(2 * np.pi * 480 * ring_t)) * 0.015 * np.exp(-ring_t * 8)
+        
+        # Mix layers - more emphasis on activity sounds
+        ambient = room_tone + pink + clicks + phones
         
         # Normalize and scale
-        ambient = ambient / np.max(np.abs(ambient)) * 0.5
+        ambient = ambient / (np.max(np.abs(ambient)) + 0.001) * 0.5
         
         # Convert to 16-bit PCM then to mulaw
         pcm_samples = (ambient * 16000).astype(np.int16)
