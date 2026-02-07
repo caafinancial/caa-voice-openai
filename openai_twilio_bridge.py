@@ -30,7 +30,7 @@ app = FastAPI(title="OpenAI-Twilio Voice Bridge")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 # OpenAI Realtime WebSocket URL
-OPENAI_WS_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17"
+OPENAI_WS_URL = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
 
 # System prompt for Sarah
 SYSTEM_PROMPT = """You are Sarah, a warm and friendly voice assistant at CAA Financial, a Colorado-based insurance and financial services company.
