@@ -18,7 +18,9 @@ import json
 import base64
 import asyncio
 import logging
+import struct
 from typing import Optional, Dict, Any
+import numpy as np
 import websockets
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import Response
@@ -26,6 +28,139 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# ============ CALL CENTER BACKGROUND NOISE ============
+# Adds subtle ambient office/call center murmur to make Sarah sound more real
+
+BACKGROUND_NOISE_VOLUME = 0.08  # 8% volume - subtle but present
+
+# Mulaw encoding/decoding tables
+MULAW_BIAS = 33
+MULAW_MAX = 32635
+
+def linear_to_mulaw(sample: int) -> int:
+    """Convert 16-bit linear PCM sample to 8-bit mulaw."""
+    sign = (sample >> 8) & 0x80
+    if sign:
+        sample = -sample
+    sample = min(sample + MULAW_BIAS, MULAW_MAX)
+    
+    # Find segment and quantization
+    exponent = 7
+    for i in range(7, 0, -1):
+        if sample >= (1 << (i + 3)):
+            exponent = i
+            break
+    else:
+        exponent = 0
+    
+    mantissa = (sample >> (exponent + 3)) & 0x0F
+    mulaw_byte = ~(sign | (exponent << 4) | mantissa) & 0xFF
+    return mulaw_byte
+
+def mulaw_to_linear(mulaw_byte: int) -> int:
+    """Convert 8-bit mulaw to 16-bit linear PCM sample."""
+    mulaw_byte = ~mulaw_byte & 0xFF
+    sign = mulaw_byte & 0x80
+    exponent = (mulaw_byte >> 4) & 0x07
+    mantissa = mulaw_byte & 0x0F
+    
+    sample = ((mantissa << 3) + MULAW_BIAS) << exponent
+    sample -= MULAW_BIAS
+    
+    if sign:
+        sample = -sample
+    return sample
+
+class BackgroundNoiseGenerator:
+    """Generates subtle call center background ambience."""
+    
+    def __init__(self, sample_rate: int = 8000):
+        self.sample_rate = sample_rate
+        self.position = 0
+        # Pre-generate a few seconds of ambient noise (looped)
+        self.noise_buffer = self._generate_ambient_noise(duration_sec=3.0)
+        
+    def _generate_ambient_noise(self, duration_sec: float) -> bytes:
+        """Generate call center ambient noise (low murmur, keyboard clicks, etc.)."""
+        num_samples = int(self.sample_rate * duration_sec)
+        
+        # Create layered ambient noise
+        t = np.linspace(0, duration_sec, num_samples)
+        
+        # Low frequency rumble (HVAC, general room tone) - 60-120Hz
+        rumble = np.sin(2 * np.pi * 80 * t) * 0.1
+        rumble += np.sin(2 * np.pi * 120 * t) * 0.05
+        
+        # Brownian noise for "murmur" effect (distant voices)
+        white = np.random.randn(num_samples)
+        brown = np.cumsum(white) / np.sqrt(num_samples)
+        brown = brown / np.max(np.abs(brown)) * 0.15
+        
+        # Occasional subtle "activity" sounds (keyboard-like clicks)
+        clicks = np.zeros(num_samples)
+        click_positions = np.random.choice(num_samples, size=int(duration_sec * 3), replace=False)
+        for pos in click_positions:
+            click_len = min(50, num_samples - pos)
+            clicks[pos:pos+click_len] = np.random.randn(click_len) * 0.02 * np.exp(-np.linspace(0, 5, click_len))
+        
+        # Mix layers
+        ambient = rumble + brown + clicks
+        
+        # Normalize and scale
+        ambient = ambient / np.max(np.abs(ambient)) * 0.5
+        
+        # Convert to 16-bit PCM then to mulaw
+        pcm_samples = (ambient * 16000).astype(np.int16)
+        mulaw_bytes = bytes([linear_to_mulaw(int(s)) for s in pcm_samples])
+        
+        return mulaw_bytes
+    
+    def get_noise_chunk(self, num_samples: int) -> bytes:
+        """Get a chunk of background noise (loops automatically)."""
+        result = bytearray(num_samples)
+        for i in range(num_samples):
+            result[i] = self.noise_buffer[self.position]
+            self.position = (self.position + 1) % len(self.noise_buffer)
+        return bytes(result)
+
+def mix_audio_with_background(audio_b64: str, noise_generator: BackgroundNoiseGenerator, volume: float = BACKGROUND_NOISE_VOLUME) -> str:
+    """Mix voice audio with background noise."""
+    try:
+        # Decode base64 mulaw audio
+        audio_bytes = base64.b64decode(audio_b64)
+        num_samples = len(audio_bytes)
+        
+        # Get matching noise chunk
+        noise_bytes = noise_generator.get_noise_chunk(num_samples)
+        
+        # Mix: convert to linear, mix, convert back to mulaw
+        mixed = bytearray(num_samples)
+        for i in range(num_samples):
+            # Convert both to linear PCM
+            voice_linear = mulaw_to_linear(audio_bytes[i])
+            noise_linear = mulaw_to_linear(noise_bytes[i])
+            
+            # Mix with noise at reduced volume
+            mixed_linear = int(voice_linear + noise_linear * volume)
+            
+            # Clamp to valid range
+            mixed_linear = max(-32768, min(32767, mixed_linear))
+            
+            # Convert back to mulaw
+            mixed[i] = linear_to_mulaw(mixed_linear)
+        
+        # Encode back to base64
+        return base64.b64encode(bytes(mixed)).decode('utf-8')
+    except Exception as e:
+        logger.error(f"Audio mixing error: {e}")
+        return audio_b64  # Return original on error
+
+
+# Global noise generator
+background_noise = BackgroundNoiseGenerator()
+# ============ END BACKGROUND NOISE ============
 
 app = FastAPI(title="OpenAI-Twilio Voice Bridge")
 
@@ -442,11 +577,14 @@ class OpenAITwilioBridge:
                 return
             audio_data = data.get("delta", "")
             if audio_data and self.stream_sid:
+                # Mix in subtle call center background noise
+                mixed_audio = mix_audio_with_background(audio_data, background_noise)
+                
                 twilio_msg = {
                     "event": "media",
                     "streamSid": self.stream_sid,
                     "media": {
-                        "payload": audio_data
+                        "payload": mixed_audio
                     }
                 }
                 await self.twilio_ws.send_json(twilio_msg)
