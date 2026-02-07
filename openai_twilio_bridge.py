@@ -85,6 +85,7 @@ class OpenAITwilioBridge:
         self.stream_sid: Optional[str] = None
         self.call_sid: Optional[str] = None
         self._running = False
+        self._user_interrupted = False  # Track if user is interrupting
     
     async def connect_openai(self) -> bool:
         """Connect to OpenAI Realtime WebSocket."""
@@ -178,17 +179,24 @@ class OpenAITwilioBridge:
             logger.info("OpenAI session updated")
         
         elif event_type == "input_audio_buffer.speech_started":
-            # User started speaking - clear Twilio's audio buffer for smooth interruption
-            logger.info("User speaking - clearing Twilio buffer")
-            if self.stream_sid:
-                clear_msg = {
-                    "event": "clear",
-                    "streamSid": self.stream_sid
-                }
-                await self.twilio_ws.send_json(clear_msg)
+            # User started speaking - let audio trail off naturally instead of hard cut
+            # OpenAI stops generating, existing buffer (~100-200ms) plays out smoothly
+            logger.info("User speaking - letting audio trail off naturally")
+            self._user_interrupted = True
         
+        elif event_type == "input_audio_buffer.speech_stopped":
+            # User stopped speaking
+            logger.info("User stopped speaking")
+            
+        elif event_type == "response.created":
+            # New response starting - reset interruption flag
+            self._user_interrupted = False
+            
         elif event_type in ("response.audio.delta", "response.output_audio.delta"):
             # Forward audio to Twilio (handle both beta and GA event names)
+            # Skip if user interrupted - let existing buffer trail off
+            if self._user_interrupted:
+                return
             audio_data = data.get("delta", "")
             if audio_data and self.stream_sid:
                 twilio_msg = {
