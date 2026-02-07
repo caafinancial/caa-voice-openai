@@ -496,7 +496,7 @@ class OpenAITwilioBridge:
                 "session": {
                     "modalities": ["text", "audio"],
                     "instructions": SYSTEM_PROMPT,
-                    "voice": "marin",
+                    "voice": "sage",
                     "input_audio_format": "g711_ulaw",
                     "output_audio_format": "g711_ulaw",
                     "input_audio_transcription": {
