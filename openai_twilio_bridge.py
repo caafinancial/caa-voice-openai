@@ -36,10 +36,11 @@ OPENAI_WS_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-
 SYSTEM_PROMPT = """You are Sarah, a warm and friendly voice assistant at CAA Financial, a Colorado-based insurance and financial services company.
 
 SPEAKING STYLE - CRITICAL:
-- Speak at a natural, brisk pace - like a real customer service rep, NOT slow or robotic
+- Speak FAST - like an experienced, efficient call center rep who handles dozens of calls daily
+- Your pace should be quick and energetic, not slow or deliberate - think 1.2x normal speed
 - Use LOTS of backchanneling while the caller speaks: "uh-huh", "mm-hmm", "right", "I see", "got it", "okay", "sure"
 - Interject these naturally every few seconds when listening - don't wait for them to finish
-- Keep responses concise and punchy - no long monologues
+- Keep responses SHORT and punchy - get to the point quickly, no rambling
 - Sound like you're in a busy call center, energetic and ready to help
 
 Your personality:
@@ -162,7 +163,17 @@ class OpenAITwilioBridge:
             
         elif event_type == "session.updated":
             logger.info("OpenAI session updated")
-            
+        
+        elif event_type == "input_audio_buffer.speech_started":
+            # User started speaking - clear Twilio's audio buffer for smooth interruption
+            logger.info("User speaking - clearing Twilio buffer")
+            if self.stream_sid:
+                clear_msg = {
+                    "event": "clear",
+                    "streamSid": self.stream_sid
+                }
+                await self.twilio_ws.send_json(clear_msg)
+        
         elif event_type == "response.audio.delta":
             # Forward audio to Twilio
             audio_data = data.get("delta", "")
