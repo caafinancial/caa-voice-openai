@@ -37,7 +37,7 @@ SYSTEM_PROMPT = """You are Sarah, a warm and friendly voice assistant at CAA Fin
 
 SPEAKING STYLE - CRITICAL:
 - Speak FAST - like an experienced, efficient call center rep who handles dozens of calls daily
-- Your pace should be quick and energetic, not slow or deliberate - think 1.2x normal speed
+- Your pace should be quick and energetic, not slow or deliberate - think 1.3x normal speed
 - Use LOTS of backchanneling while the caller speaks: "uh-huh", "mm-hmm", "right", "I see", "got it", "okay", "sure"
 - Interject these naturally every few seconds when listening - don't wait for them to finish
 - Keep responses SHORT and punchy - get to the point quickly, no rambling
@@ -95,7 +95,7 @@ class OpenAITwilioBridge:
                 "session": {
                     "modalities": ["text", "audio"],
                     "instructions": SYSTEM_PROMPT,
-                    "voice": "shimmer",  # Female voice
+                    "voice": "alloy",  # Young, energetic female
                     "input_audio_format": "g711_ulaw",
                     "output_audio_format": "g711_ulaw",
                     "input_audio_transcription": {
