@@ -414,8 +414,14 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
                 query["type"] = type_mapping.get(policy_type, policy_type)
             if args.get("policy_number"):
                 query["policy_number"] = args["policy_number"]
-                
-            policies = await db.policies.find(query).to_list(10)
+            
+            # First try to get active policies, sorted by most recent
+            query_active = {**query, "status": "active"}
+            policies = await db.policies.find(query_active).sort("expiration_date", -1).to_list(10)
+            
+            # If no active, get most recent (including expired)
+            if not policies:
+                policies = await db.policies.find(query).sort("expiration_date", -1).to_list(5)
             
             # Enrich with policy_details (has coverage/deductible info)
             enriched = []
