@@ -216,10 +216,14 @@ TOOLS = [
     {
         "type": "function",
         "name": "lookup_policy",
-        "description": "Get policy details (coverage, deductibles, premiums). Use AFTER finding the customer. Searches by the customer's phone number.",
+        "description": "Get policy details (coverage, deductibles, premiums). ALWAYS pass the customer_name if you know it from a previous lookup.",
         "parameters": {
             "type": "object",
             "properties": {
+                "customer_name": {
+                    "type": "string",
+                    "description": "Customer's full name (REQUIRED if known from previous lookup)"
+                },
                 "policy_number": {
                     "type": "string",
                     "description": "The policy number if known"
@@ -236,10 +240,15 @@ TOOLS = [
     {
         "type": "function",
         "name": "get_account_summary",
-        "description": "Get a quick summary of the customer's account - active policies, total premium, pending tasks. Use for general account questions.",
+        "description": "Get a quick summary of the customer's account - active policies, total premium, pending tasks. ALWAYS pass the customer_name if known.",
         "parameters": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "customer_name": {
+                    "type": "string",
+                    "description": "Customer's full name (REQUIRED if known from previous lookup)"
+                }
+            },
             "required": []
         }
     }
@@ -360,18 +369,26 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
             return json.dumps({"status": "not_found", "message": "No customer found with this phone number or name"})
             
         elif name == "lookup_policy":
-            # First find customer using flexible phone pattern
-            if not phone_pattern:
-                return json.dumps({"status": "error", "message": "No phone number available for lookup"})
+            # First find customer using phone pattern OR name
+            customer = None
             
-            customer = await db.customers.find_one({
-                "$or": [
-                    {"phone": {"$regex": phone_pattern, "$options": "i"}},
-                    {"mobile": {"$regex": phone_pattern, "$options": "i"}}
-                ]
-            })
+            # Try phone lookup first
+            if phone_pattern:
+                customer = await db.customers.find_one({
+                    "$or": [
+                        {"phone": {"$regex": phone_pattern, "$options": "i"}},
+                        {"mobile": {"$regex": phone_pattern, "$options": "i"}}
+                    ]
+                })
+            
+            # Try by name if phone didn't work and name was provided
+            if not customer and args.get("customer_name"):
+                customer = await db.customers.find_one({
+                    "name": {"$regex": args.get("customer_name"), "$options": "i"}
+                })
+            
             if not customer:
-                return json.dumps({"status": "not_found", "message": "Customer not found"})
+                return json.dumps({"status": "not_found", "message": "Customer not found. Please provide customer name or phone."})
             
             customer_id = str(customer.get("_id"))  # Convert to string - policies store customer_id as string
             
@@ -414,17 +431,25 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
             
         elif name == "get_account_summary":
             # Use pre-computed customer_summaries for fast lookup
-            if not phone_pattern:
-                return json.dumps({"status": "error", "message": "No phone number available for lookup"})
+            customer = None
             
-            customer = await db.customers.find_one({
-                "$or": [
-                    {"phone": {"$regex": phone_pattern, "$options": "i"}},
-                    {"mobile": {"$regex": phone_pattern, "$options": "i"}}
-                ]
-            })
+            # Try phone lookup first
+            if phone_pattern:
+                customer = await db.customers.find_one({
+                    "$or": [
+                        {"phone": {"$regex": phone_pattern, "$options": "i"}},
+                        {"mobile": {"$regex": phone_pattern, "$options": "i"}}
+                    ]
+                })
+            
+            # Try by name if phone didn't work and name was provided
+            if not customer and args.get("customer_name"):
+                customer = await db.customers.find_one({
+                    "name": {"$regex": args.get("customer_name"), "$options": "i"}
+                })
+            
             if not customer:
-                return json.dumps({"status": "not_found", "message": "Customer not found"})
+                return json.dumps({"status": "not_found", "message": "Customer not found. Please provide customer name."})
             
             customer_id = str(customer.get("_id"))  # Convert to string
             
