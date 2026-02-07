@@ -511,9 +511,18 @@ class OpenAITwilioBridge:
         if event_type == "start":
             self.stream_sid = data["start"]["streamSid"]
             self.call_sid = data["start"].get("callSid")
-            # Extract caller's phone number
+            # Extract caller's phone number - try multiple sources
             custom_params = data["start"].get("customParameters", {})
-            self.caller_phone = custom_params.get("from", data["start"].get("from", "unknown"))
+            logger.info(f"Stream start data: customParams={custom_params}, full_start={data['start']}")
+            
+            # Try custom params first (lowercase and uppercase variants)
+            self.caller_phone = (
+                custom_params.get("from") or 
+                custom_params.get("From") or 
+                custom_params.get("caller") or
+                data["start"].get("from") or
+                "unknown"
+            )
             logger.info(f"Twilio stream started: {self.stream_sid}, caller: {self.caller_phone}")
             
             # Send initial greeting with caller context
