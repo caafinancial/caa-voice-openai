@@ -344,9 +344,11 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
             # Try by name if phone didn't work and name was provided
             if not customer and args.get("name"):
                 name_query = args.get("name")
+                logger.info(f"=== Searching by NAME: '{name_query}' ===")
                 customer = await db.customers.find_one({
                     "name": {"$regex": name_query, "$options": "i"}
                 })
+                logger.info(f"=== Name search result: {'FOUND' if customer else 'NOT FOUND'} ===")
             if customer:
                 # Remove sensitive fields
                 customer.pop("_id", None)
