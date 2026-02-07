@@ -318,7 +318,7 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
     # Normalize phone number (remove +1, spaces, dashes)
     normalized_phone = caller_phone.replace("+1", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
     
-    if not db:
+    if db is None:
         # Return mock data if no database
         return json.dumps({
             "status": "mock_data",
@@ -681,7 +681,7 @@ class OpenAITwilioBridge:
 @app.get("/health")
 async def health():
     """Health check endpoint."""
-    mongo_status = "connected" if db else "not_connected"
+    mongo_status = "connected" if db is not None else "not_connected"
     return {"status": "healthy", "service": "openai-twilio-bridge", "mongodb": mongo_status}
 
 
