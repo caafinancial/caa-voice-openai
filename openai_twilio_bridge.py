@@ -375,7 +375,7 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
             if not customer:
                 return json.dumps({"status": "not_found", "message": "Customer not found"})
             
-            customer_id = customer.get("_id")
+            customer_id = str(customer.get("_id"))  # Convert to string - policies store customer_id as string
             
             # Look up policies
             query = {"customer_id": customer_id}
@@ -428,10 +428,10 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
             if not customer:
                 return json.dumps({"status": "not_found", "message": "Customer not found"})
             
-            customer_id = customer.get("_id")
+            customer_id = str(customer.get("_id"))  # Convert to string
             
             # Try customer_summaries first (fast, pre-computed)
-            summary = await db.customer_summaries.find_one({"customer_id": str(customer_id)})
+            summary = await db.customer_summaries.find_one({"customer_id": customer_id})
             if summary:
                 summary.pop("_id", None)
                 return json.dumps({"status": "found", "summary": summary})
