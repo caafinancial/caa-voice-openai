@@ -596,19 +596,22 @@ class OpenAITwilioBridge:
             self._user_interrupted = True
             
             # Only cancel if there's actually an active response
+            # Clear Twilio buffer regardless to stop any in-flight audio
+            if self.stream_sid:
+                clear_msg = {
+                    "event": "clear",
+                    "streamSid": self.stream_sid
+                }
+                await self.twilio_ws.send_json(clear_msg)
+            
             if self._response_active and self.openai_ws:
                 logger.info("User interrupted - canceling active response")
-                await self.openai_ws.send(json.dumps({"type": "response.cancel"}))
-            
-                if self.stream_sid:
-                    await asyncio.sleep(0.15)
-                    clear_msg = {
-                        "event": "clear",
-                        "streamSid": self.stream_sid
-                    }
-                    await self.twilio_ws.send_json(clear_msg)
+                try:
+                    await self.openai_ws.send(json.dumps({"type": "response.cancel"}))
+                except Exception as e:
+                    logger.warning(f"Failed to send cancel: {e}")
             else:
-                logger.info("User speaking (no active response to cancel)")
+                logger.debug("User speaking (no active response)")
         
         elif event_type == "input_audio_buffer.speech_stopped":
             logger.info("User stopped speaking")
@@ -618,17 +621,19 @@ class OpenAITwilioBridge:
             self._response_active = True
             logger.info("Response started")
         
-        elif event_type in ("response.done", "response.cancelled"):
+        elif event_type in ("response.done", "response.cancelled", "response.audio.done", "response.output_audio.done"):
             self._response_active = False
-            logger.info(f"Response ended: {event_type}")
+            if event_type in ("response.done", "response.cancelled"):
+                logger.info(f"Response ended: {event_type}")
             
         elif event_type in ("response.audio.delta", "response.output_audio.delta"):
+            # Mark that we're actively sending audio
+            self._response_active = True
+            
             if self._user_interrupted:
                 return
             audio_data = data.get("delta", "")
             if audio_data and self.stream_sid:
-                # Background noise disabled for now - synthetic noise sounded bad
-                # and only played during speech (not constant). TODO: use real ambient audio file
                 twilio_msg = {
                     "event": "media",
                     "streamSid": self.stream_sid,
@@ -681,7 +686,13 @@ class OpenAITwilioBridge:
                 logger.info(f"User: {transcript}")
                 
         elif event_type == "error":
-            logger.error(f"OpenAI error: {data}")
+            error_info = data.get("error", {})
+            error_code = error_info.get("code", "")
+            # Suppress harmless cancel errors (race condition when user speaks during response end)
+            if error_code == "response_cancel_not_active":
+                logger.debug(f"Cancel race condition (harmless): {error_info.get('message')}")
+            else:
+                logger.error(f"OpenAI error: {data}")
     
     async def run(self):
         """Main bridge loop."""
