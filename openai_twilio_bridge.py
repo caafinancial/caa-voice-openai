@@ -306,7 +306,8 @@ async def startup():
     if MONGO_URI:
         try:
             mongo_client = AsyncIOMotorClient(MONGO_URI)
-            db = mongo_client.get_default_database()
+            # Use explicit database name since URI might not have one
+            db = mongo_client["caafinancial"]
             # Test connection
             await db.command("ping")
             logger.info(f"Connected to MongoDB: {db.name}")
@@ -695,9 +696,13 @@ async def voice_incoming(request: Request):
     protocol = request.headers.get("x-forwarded-proto", "https")
     ws_protocol = "wss" if protocol == "https" else "ws"
     
-    # Get caller info from Twilio request
-    form_data = await request.form()
-    caller_from = form_data.get("From", "unknown")
+    # Get caller info from Twilio request (safely)
+    caller_from = "unknown"
+    try:
+        form_data = await request.form()
+        caller_from = form_data.get("From", "unknown")
+    except Exception as e:
+        logger.warning(f"Could not parse form data: {e}")
     
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
