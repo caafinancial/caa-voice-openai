@@ -399,11 +399,19 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
             
             customer_id = str(customer.get("_id"))  # Convert to string - policies store customer_id as string
             
+            # Map simplified types to database values
+            type_mapping = {
+                "auto": "Personal Auto",
+                "home": "Homeowners", 
+                "life": "Life"
+            }
+            
             # Look up policies
             query = {"customer_id": customer_id}
             policy_type = args.get("policy_type", "any")
             if policy_type and policy_type != "any":
-                query["type"] = policy_type
+                # Use mapped type or original if not in mapping
+                query["type"] = type_mapping.get(policy_type, policy_type)
             if args.get("policy_number"):
                 query["policy_number"] = args["policy_number"]
                 
