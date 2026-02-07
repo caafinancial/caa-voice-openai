@@ -179,10 +179,22 @@ class OpenAITwilioBridge:
             logger.info("OpenAI session updated")
         
         elif event_type == "input_audio_buffer.speech_started":
-            # User started speaking - let audio trail off naturally instead of hard cut
-            # OpenAI stops generating, existing buffer (~100-200ms) plays out smoothly
-            logger.info("User speaking - letting audio trail off naturally")
+            # User started speaking - cancel current response and let audio trail off
+            logger.info("User interrupted - canceling response")
             self._user_interrupted = True
+            
+            # Tell OpenAI to stop generating current response immediately
+            if self.openai_ws:
+                await self.openai_ws.send(json.dumps({"type": "response.cancel"}))
+            
+            # Clear Twilio buffer after short delay for smooth trail-off
+            if self.stream_sid:
+                await asyncio.sleep(0.15)  # 150ms trail-off
+                clear_msg = {
+                    "event": "clear",
+                    "streamSid": self.stream_sid
+                }
+                await self.twilio_ws.send_json(clear_msg)
         
         elif event_type == "input_audio_buffer.speech_stopped":
             # User stopped speaking
