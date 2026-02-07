@@ -197,17 +197,17 @@ TOOLS = [
     {
         "type": "function",
         "name": "lookup_customer",
-        "description": "Look up customer information by phone number or name. Use this when the caller asks about their account or personal information.",
+        "description": "ALWAYS use this first when caller gives their name or phone number. Look up customer by name (e.g. 'Lawrence Choi') or phone number. Call this immediately when someone identifies themselves.",
         "parameters": {
             "type": "object",
             "properties": {
                 "phone": {
                     "type": "string",
-                    "description": "The caller's phone number"
+                    "description": "Phone number the caller provided (any format)"
                 },
                 "name": {
                     "type": "string",
-                    "description": "The caller's name (first and/or last)"
+                    "description": "Name the caller provided (e.g. 'Lawrence Choi', 'John Smith')"
                 }
             },
             "required": []
@@ -216,7 +216,7 @@ TOOLS = [
     {
         "type": "function",
         "name": "lookup_policy",
-        "description": "Look up policy details including coverage, deductibles, premiums, and dates. Use when caller asks about their policy, coverage, deductible, premium, or next payment.",
+        "description": "Get policy details (coverage, deductibles, premiums). Use AFTER finding the customer. Searches by the customer's phone number.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -246,35 +246,27 @@ TOOLS = [
 ]
 
 # System prompt for Sarah
-SYSTEM_PROMPT = """You are Sarah, a friendly and capable voice assistant at CAA Financial.
+SYSTEM_PROMPT = """You are Sarah, a friendly voice assistant at CAA Financial.
+
+CRITICAL - ALWAYS USE TOOLS:
+- When caller says their NAME → immediately call lookup_customer with their name
+- When caller says their PHONE → immediately call lookup_customer with their phone
+- When they ask about policy/coverage → call lookup_policy
+- Say "let me look that up" while you call the tool
 
 HOW TO SPEAK:
-- Be warm and conversational, like a helpful coworker
-- Keep responses SHORT - get to the point, don't over-explain
-- Use natural acknowledgments: "mhm", "okay", "got it"
-- Speak at a normal pace, not slow or overly careful
+- Warm and conversational, like a helpful coworker
+- Keep responses SHORT
+- Natural acknowledgments: "okay", "got it", "sure"
 
 AVOID:
-- AI phrases: "absolutely", "certainly", "I'd be happy to", "great question"
-- Sounding robotic or rehearsed
-- Long-winded explanations
-
-YOUR TOOLS:
-- lookup_customer: Find customer by phone or name
-- lookup_policy: Get coverage, deductibles, premiums, policy dates  
-- get_account_summary: Quick overview of their account
-- When looking things up, say "let me check..." then use the tool
-- If you can't find info: "I'm not seeing that in the system..."
-
-YOUR PERSONALITY:
-- Warm, patient, genuinely helpful
-- You care about the caller and want to solve their problem
-- Efficient but never cold
+- AI phrases: "absolutely", "certainly", "I'd be happy to"
+- Long explanations
 
 ABOUT CAA FINANCIAL:
-- Family business serving communities for 20+ years
-- English, Spanish, Korean, and Burmese speakers
-- Auto/home/life insurance, tax prep, mortgages, financial advisory"""
+- Family business, 20+ years
+- English, Spanish, Korean, Burmese
+- Insurance, tax prep, mortgages"""
 
 
 @app.on_event("startup")
