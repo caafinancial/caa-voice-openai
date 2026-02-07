@@ -109,7 +109,7 @@ class OpenAITwilioBridge:
                 "session": {
                     "modalities": ["text", "audio"],
                     "instructions": SYSTEM_PROMPT,
-                    "voice": "sage",  # calm, wise - trying different vibe
+                    "voice": "marin",  # OpenAI's recommended - warm, expressive
                     "input_audio_format": "g711_ulaw",
                     "output_audio_format": "g711_ulaw",
                     "input_audio_transcription": {
