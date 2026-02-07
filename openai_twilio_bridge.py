@@ -88,8 +88,7 @@ class OpenAITwilioBridge:
         """Connect to OpenAI Realtime WebSocket."""
         try:
             headers = [
-                ("Authorization", f"Bearer {OPENAI_API_KEY}"),
-                ("OpenAI-Beta", "realtime=v1")
+                ("Authorization", f"Bearer {OPENAI_API_KEY}")
             ]
             
             self.openai_ws = await websockets.connect(
@@ -100,24 +99,32 @@ class OpenAITwilioBridge:
             )
             logger.info("Connected to OpenAI Realtime API")
             
-            # Configure the session
+            # Configure the session (GA API format)
             session_config = {
                 "type": "session.update",
                 "session": {
-                    "modalities": ["text", "audio"],
+                    "type": "realtime",
+                    "model": "gpt-realtime",
+                    "output_modalities": ["audio"],
                     "instructions": SYSTEM_PROMPT,
-                    "voice": "alloy",  # Female voice
-                    "input_audio_format": "g711_ulaw",
-                    "output_audio_format": "g711_ulaw",
+                    "audio": {
+                        "input": {
+                            "format": {
+                                "type": "g711_ulaw"
+                            },
+                            "turn_detection": {
+                                "type": "semantic_vad"
+                            }
+                        },
+                        "output": {
+                            "format": {
+                                "type": "g711_ulaw"
+                            },
+                            "voice": "marin"
+                        }
+                    },
                     "input_audio_transcription": {
                         "model": "whisper-1"
-                    },
-                    "turn_detection": {
-                        "type": "server_vad",
-                        "threshold": 0.4,
-                        "prefix_padding_ms": 200,
-                        "silence_duration_ms": 500,
-                        "create_response": True
                     }
                 }
             }
