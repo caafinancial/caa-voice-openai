@@ -1,14 +1,16 @@
 """
 OpenAI Realtime API + Twilio Media Streams Bridge
-
-Bridges Twilio Media Streams to OpenAI Realtime API for voice conversations.
-OpenAI Realtime supports g711_ulaw natively - no audio conversion needed!
+with MongoDB integration for policy lookups.
 
 Audio Flow:
 1. Twilio sends mulaw 8kHz audio via Media Streams
 2. Bridge forwards directly to OpenAI (supports g711_ulaw)
 3. OpenAI processes and returns audio
 4. Bridge forwards back to Twilio
+
+Function Calling:
+- OpenAI can call tools to lookup customer/policy data from MongoDB
+- Caller identified by phone number from Twilio
 """
 
 import os
@@ -16,21 +18,91 @@ import json
 import base64
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any
 import websockets
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import Response
+from motor.motor_asyncio import AsyncIOMotorClient
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="OpenAI-Twilio Voice Bridge")
 
-# OpenAI credentials
+# Credentials from environment
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+MONGO_URI = os.environ.get("MONGO_URI", "")
+
+# MongoDB client (initialized on startup)
+mongo_client: Optional[AsyncIOMotorClient] = None
+db = None
 
 # OpenAI Realtime WebSocket URL
 OPENAI_WS_URL = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
+
+# Tools for function calling
+TOOLS = [
+    {
+        "type": "function",
+        "name": "lookup_customer",
+        "description": "Look up customer information by phone number. Use this when the caller asks about their account, policies, or personal information.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "phone": {
+                    "type": "string",
+                    "description": "The caller's phone number (will use current caller's number if not specified)"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "lookup_policy",
+        "description": "Look up policy details including coverage, deductibles, premiums, and dates. Use when caller asks about their policy, coverage, deductible, premium, or payment.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "policy_number": {
+                    "type": "string",
+                    "description": "The policy number if known"
+                },
+                "policy_type": {
+                    "type": "string",
+                    "enum": ["auto", "home", "life", "any"],
+                    "description": "Type of policy to look up"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "lookup_claims",
+        "description": "Look up claims history and status for a customer. Use when caller asks about claims, accidents, or claim status.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "claim_number": {
+                    "type": "string",
+                    "description": "Specific claim number if known"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_payment_info",
+        "description": "Get payment information, billing history, and next payment due. Use when caller asks about payments, bills, or amounts due.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    }
+]
 
 # System prompt for Sarah
 SYSTEM_PROMPT = """You are Sarah, a friendly voice assistant at CAA Financial. You're helpful but you're NOT an expert who knows everything instantly.
@@ -56,6 +128,12 @@ WHAT TO DO:
 - Ask clarifying questions: "wait, so you mean...?", "like, the monthly payment or...?"
 - React naturally: "oh no!", "oh nice!", "oh okay okay"
 
+TOOLS - USE THEM:
+- You have access to the customer database. USE your tools to look up real information!
+- When someone asks about their policy, deductible, payment, etc - use lookup_policy or get_payment_info
+- Say "let me pull that up..." or "one sec, checking your account..." while you look things up
+- If you can't find info, be honest: "hmm, I'm not seeing that in your file..."
+
 Your personality:
 - Genuinely warm, patient, and approachable - like talking to a trusted friend
 - Express real empathy - you actually care about helping callers
@@ -66,14 +144,166 @@ About CAA Financial:
 - Serves English, Spanish, Korean, and Burmese speakers  
 - Products: auto/home/life insurance, tax prep, mortgages, financial advisory
 
-Your approach:
-1. Greet warmly but quickly: "Hi, this is Sarah from CAA Financial. How can I help you today?"
-2. Listen actively with FREQUENT verbal cues - "mm-hmm", "uh-huh", "okay" every few seconds
-3. Ask clarifying questions when needed - keep them short
-4. Explain things clearly in simple terms - be concise
-5. Close warmly: "Anything else I can help with?"
-
 Remember: Real humans speak at a normal conversational pace, not slowly. Sound natural and engaged, not like reading a script."""
+
+
+@app.on_event("startup")
+async def startup():
+    """Initialize MongoDB connection on startup."""
+    global mongo_client, db
+    if MONGO_URI:
+        try:
+            mongo_client = AsyncIOMotorClient(MONGO_URI)
+            db = mongo_client.get_default_database()
+            # Test connection
+            await db.command("ping")
+            logger.info(f"Connected to MongoDB: {db.name}")
+        except Exception as e:
+            logger.error(f"MongoDB connection failed: {e}")
+    else:
+        logger.warning("MONGO_URI not set - database lookups will return mock data")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Close MongoDB connection on shutdown."""
+    global mongo_client
+    if mongo_client:
+        mongo_client.close()
+
+
+async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -> str:
+    """Execute a function call and return the result as a string."""
+    logger.info(f"Executing function: {name} with args: {args}, caller: {caller_phone}")
+    
+    # Normalize phone number (remove +1, spaces, dashes)
+    normalized_phone = caller_phone.replace("+1", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
+    
+    if not db:
+        # Return mock data if no database
+        return json.dumps({
+            "status": "mock_data",
+            "message": "Database not connected. This is sample data.",
+            "data": {
+                "customer_name": "John Smith",
+                "policy_number": "POL-12345",
+                "policy_type": "auto",
+                "deductible": "$500",
+                "monthly_premium": "$125",
+                "next_payment_due": "March 1, 2026"
+            }
+        })
+    
+    try:
+        if name == "lookup_customer":
+            # Look up customer by phone
+            customer = await db.customers.find_one({
+                "$or": [
+                    {"phone": {"$regex": normalized_phone}},
+                    {"mobile": {"$regex": normalized_phone}},
+                    {"phones": {"$elemMatch": {"$regex": normalized_phone}}}
+                ]
+            })
+            if customer:
+                # Remove sensitive fields
+                customer.pop("_id", None)
+                customer.pop("ssn", None)
+                customer.pop("password", None)
+                return json.dumps({"status": "found", "customer": customer})
+            return json.dumps({"status": "not_found", "message": "No customer found with this phone number"})
+            
+        elif name == "lookup_policy":
+            # First find customer
+            customer = await db.customers.find_one({
+                "$or": [
+                    {"phone": {"$regex": normalized_phone}},
+                    {"mobile": {"$regex": normalized_phone}}
+                ]
+            })
+            if not customer:
+                return json.dumps({"status": "not_found", "message": "Customer not found"})
+            
+            # Look up policies
+            query = {"customer_id": customer.get("_id")}
+            policy_type = args.get("policy_type", "any")
+            if policy_type and policy_type != "any":
+                query["type"] = policy_type
+            if args.get("policy_number"):
+                query["policy_number"] = args["policy_number"]
+                
+            policies = await db.policies.find(query).to_list(10)
+            for p in policies:
+                p["_id"] = str(p["_id"])
+                p.pop("customer_id", None)
+            
+            if policies:
+                return json.dumps({"status": "found", "policies": policies})
+            return json.dumps({"status": "not_found", "message": "No policies found"})
+            
+        elif name == "lookup_claims":
+            customer = await db.customers.find_one({
+                "$or": [
+                    {"phone": {"$regex": normalized_phone}},
+                    {"mobile": {"$regex": normalized_phone}}
+                ]
+            })
+            if not customer:
+                return json.dumps({"status": "not_found", "message": "Customer not found"})
+            
+            query = {"customer_id": customer.get("_id")}
+            if args.get("claim_number"):
+                query["claim_number"] = args["claim_number"]
+                
+            claims = await db.claims.find(query).sort("date", -1).to_list(5)
+            for c in claims:
+                c["_id"] = str(c["_id"])
+                c.pop("customer_id", None)
+            
+            if claims:
+                return json.dumps({"status": "found", "claims": claims})
+            return json.dumps({"status": "not_found", "message": "No claims found"})
+            
+        elif name == "get_payment_info":
+            customer = await db.customers.find_one({
+                "$or": [
+                    {"phone": {"$regex": normalized_phone}},
+                    {"mobile": {"$regex": normalized_phone}}
+                ]
+            })
+            if not customer:
+                return json.dumps({"status": "not_found", "message": "Customer not found"})
+            
+            # Get billing/payment info
+            payments = await db.payments.find(
+                {"customer_id": customer.get("_id")}
+            ).sort("date", -1).to_list(5)
+            
+            for p in payments:
+                p["_id"] = str(p["_id"])
+                p.pop("customer_id", None)
+            
+            # Get next due
+            policies = await db.policies.find(
+                {"customer_id": customer.get("_id"), "status": "active"}
+            ).to_list(10)
+            
+            result = {
+                "status": "found",
+                "recent_payments": payments,
+                "active_policies": len(policies),
+            }
+            if policies:
+                result["next_due"] = policies[0].get("next_payment_date", "Unknown")
+                result["amount_due"] = policies[0].get("premium", "Unknown")
+                
+            return json.dumps(result)
+            
+        else:
+            return json.dumps({"error": f"Unknown function: {name}"})
+            
+    except Exception as e:
+        logger.error(f"Function execution error: {e}")
+        return json.dumps({"error": str(e)})
 
 
 class OpenAITwilioBridge:
@@ -84,15 +314,16 @@ class OpenAITwilioBridge:
         self.openai_ws: Optional[websockets.WebSocketClientProtocol] = None
         self.stream_sid: Optional[str] = None
         self.call_sid: Optional[str] = None
+        self.caller_phone: Optional[str] = None
         self._running = False
-        self._user_interrupted = False  # Track if user is interrupting
+        self._user_interrupted = False
     
     async def connect_openai(self) -> bool:
         """Connect to OpenAI Realtime WebSocket."""
         try:
             headers = [
                 ("Authorization", f"Bearer {OPENAI_API_KEY}"),
-                ("OpenAI-Beta", "realtime=v1")  # Keep beta for compatibility
+                ("OpenAI-Beta", "realtime=v1")
             ]
             
             self.openai_ws = await websockets.connect(
@@ -103,13 +334,13 @@ class OpenAITwilioBridge:
             )
             logger.info("Connected to OpenAI Realtime API")
             
-            # Configure the session (beta format with gpt-realtime model)
+            # Configure the session with tools
             session_config = {
                 "type": "session.update",
                 "session": {
                     "modalities": ["text", "audio"],
                     "instructions": SYSTEM_PROMPT,
-                    "voice": "marin",  # OpenAI's recommended - warm, expressive
+                    "voice": "marin",
                     "input_audio_format": "g711_ulaw",
                     "output_audio_format": "g711_ulaw",
                     "input_audio_transcription": {
@@ -121,11 +352,13 @@ class OpenAITwilioBridge:
                         "prefix_padding_ms": 200,
                         "silence_duration_ms": 500,
                         "create_response": True
-                    }
+                    },
+                    "tools": TOOLS,
+                    "tool_choice": "auto"
                 }
             }
             await self.openai_ws.send(json.dumps(session_config))
-            logger.info("Sent session config to OpenAI")
+            logger.info("Sent session config with tools to OpenAI")
             
             return True
         except Exception as e:
@@ -139,15 +372,21 @@ class OpenAITwilioBridge:
         if event_type == "start":
             self.stream_sid = data["start"]["streamSid"]
             self.call_sid = data["start"].get("callSid")
-            logger.info(f"Twilio stream started: {self.stream_sid}")
+            # Extract caller's phone number
+            custom_params = data["start"].get("customParameters", {})
+            self.caller_phone = custom_params.get("from", data["start"].get("from", "unknown"))
+            logger.info(f"Twilio stream started: {self.stream_sid}, caller: {self.caller_phone}")
             
-            # Send initial greeting
+            # Send initial greeting with caller context
             greeting = {
                 "type": "conversation.item.create",
                 "item": {
                     "type": "message",
                     "role": "user",
-                    "content": [{"type": "input_text", "text": "The caller just connected. Greet them warmly."}]
+                    "content": [{
+                        "type": "input_text", 
+                        "text": f"A caller just connected from phone number {self.caller_phone}. Greet them warmly. You can use your tools to look up their account information if they ask about their policy."
+                    }]
                 }
             }
             if self.openai_ws:
@@ -155,8 +394,7 @@ class OpenAITwilioBridge:
                 await self.openai_ws.send(json.dumps({"type": "response.create"}))
             
         elif event_type == "media":
-            # Forward audio to OpenAI
-            audio_data = data["media"]["payload"]  # base64 mulaw
+            audio_data = data["media"]["payload"]
             if self.openai_ws:
                 audio_event = {
                     "type": "input_audio_buffer.append",
@@ -179,17 +417,14 @@ class OpenAITwilioBridge:
             logger.info("OpenAI session updated")
         
         elif event_type == "input_audio_buffer.speech_started":
-            # User started speaking - cancel current response and let audio trail off
             logger.info("User interrupted - canceling response")
             self._user_interrupted = True
             
-            # Tell OpenAI to stop generating current response immediately
             if self.openai_ws:
                 await self.openai_ws.send(json.dumps({"type": "response.cancel"}))
             
-            # Clear Twilio buffer after short delay for smooth trail-off
             if self.stream_sid:
-                await asyncio.sleep(0.15)  # 150ms trail-off
+                await asyncio.sleep(0.15)
                 clear_msg = {
                     "event": "clear",
                     "streamSid": self.stream_sid
@@ -197,16 +432,12 @@ class OpenAITwilioBridge:
                 await self.twilio_ws.send_json(clear_msg)
         
         elif event_type == "input_audio_buffer.speech_stopped":
-            # User stopped speaking
             logger.info("User stopped speaking")
             
         elif event_type == "response.created":
-            # New response starting - reset interruption flag
             self._user_interrupted = False
             
         elif event_type in ("response.audio.delta", "response.output_audio.delta"):
-            # Forward audio to Twilio (handle both beta and GA event names)
-            # Skip if user interrupted - let existing buffer trail off
             if self._user_interrupted:
                 return
             audio_data = data.get("delta", "")
@@ -215,10 +446,40 @@ class OpenAITwilioBridge:
                     "event": "media",
                     "streamSid": self.stream_sid,
                     "media": {
-                        "payload": audio_data  # Already base64 mulaw
+                        "payload": audio_data
                     }
                 }
                 await self.twilio_ws.send_json(twilio_msg)
+        
+        elif event_type == "response.function_call_arguments.done":
+            # Function call completed - execute it
+            call_id = data.get("call_id")
+            name = data.get("name")
+            arguments = data.get("arguments", "{}")
+            
+            logger.info(f"Function call: {name}({arguments})")
+            
+            try:
+                args = json.loads(arguments)
+            except:
+                args = {}
+            
+            # Execute the function
+            result = await execute_function(name, args, self.caller_phone or "unknown")
+            
+            # Send the result back to OpenAI
+            function_output = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": result
+                }
+            }
+            await self.openai_ws.send(json.dumps(function_output))
+            
+            # Trigger response generation with the function result
+            await self.openai_ws.send(json.dumps({"type": "response.create"}))
                 
         elif event_type in ("response.audio_transcript.delta", "response.output_audio_transcript.delta"):
             transcript = data.get("delta", "")
@@ -261,7 +522,6 @@ class OpenAITwilioBridge:
         
         await asyncio.gather(receive_twilio(), receive_openai())
         
-        # Cleanup
         if self.openai_ws:
             await self.openai_ws.close()
 
@@ -269,7 +529,8 @@ class OpenAITwilioBridge:
 @app.get("/health")
 async def health():
     """Health check endpoint."""
-    return {"status": "healthy", "service": "openai-twilio-bridge"}
+    mongo_status = "connected" if db else "not_connected"
+    return {"status": "healthy", "service": "openai-twilio-bridge", "mongodb": mongo_status}
 
 
 @app.post("/voice/incoming")
@@ -279,14 +540,20 @@ async def voice_incoming(request: Request):
     protocol = request.headers.get("x-forwarded-proto", "https")
     ws_protocol = "wss" if protocol == "https" else "ws"
     
+    # Get caller info from Twilio request
+    form_data = await request.form()
+    caller_from = form_data.get("From", "unknown")
+    
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect>
-        <Stream url="{ws_protocol}://{host}/media-stream" />
+        <Stream url="{ws_protocol}://{host}/media-stream">
+            <Parameter name="from" value="{caller_from}" />
+        </Stream>
     </Connect>
 </Response>"""
     
-    logger.info(f"Incoming call - streaming to {ws_protocol}://{host}/media-stream")
+    logger.info(f"Incoming call from {caller_from} - streaming to {ws_protocol}://{host}/media-stream")
     return Response(content=twiml, media_type="application/xml")
 
 
