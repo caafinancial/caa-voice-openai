@@ -355,7 +355,7 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
                 customer.pop("ssn", None)
                 customer.pop("password", None)
                 logger.info(f"=== FOUND CUSTOMER: {customer.get('name')} ===")
-                return json.dumps({"status": "found", "customer": customer})
+                return json.dumps({"status": "found", "customer": customer}, default=str)
             logger.info(f"=== CUSTOMER NOT FOUND - phone_pattern: {phone_pattern}, name: {args.get('name')} ===")
             return json.dumps({"status": "not_found", "message": "No customer found with this phone number or name"})
             
@@ -432,7 +432,7 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
             summary = await db.customer_summaries.find_one({"customer_id": customer_id})
             if summary:
                 summary.pop("_id", None)
-                return json.dumps({"status": "found", "summary": summary})
+                return json.dumps({"status": "found", "summary": summary}, default=str)
             
             # Fallback: compute summary
             active_policies = await db.policies.find(
@@ -448,7 +448,7 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
                 "total_annual_premium": f"${total_premium:.2f}",
                 "policy_types": list(set(p.get("type", "Unknown") for p in active_policies))
             }
-            return json.dumps(result)
+            return json.dumps(result, default=str)
             
         else:
             return json.dumps({"error": f"Unknown function: {name}"})
