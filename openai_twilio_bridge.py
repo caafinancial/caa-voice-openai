@@ -297,7 +297,9 @@ async def shutdown():
 
 async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -> str:
     """Execute a function call and return the result as a string."""
-    logger.info(f"Executing function: {name} with args: {args}, caller: {caller_phone}")
+    logger.info(f"=== FUNCTION CALL: {name} ===")
+    logger.info(f"Args: {args}")
+    logger.info(f"Caller phone: {caller_phone}")
     
     # Use phone from args if provided, otherwise use caller_phone
     phone_to_use = args.get("phone") or caller_phone
@@ -350,8 +352,10 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
                 customer.pop("_id", None)
                 customer.pop("ssn", None)
                 customer.pop("password", None)
+                logger.info(f"=== FOUND CUSTOMER: {customer.get('name')} ===")
                 return json.dumps({"status": "found", "customer": customer})
-            return json.dumps({"status": "not_found", "message": "No customer found with this phone number"})
+            logger.info(f"=== CUSTOMER NOT FOUND - phone_pattern: {phone_pattern}, name: {args.get('name')} ===")
+            return json.dumps({"status": "not_found", "message": "No customer found with this phone number or name"})
             
         elif name == "lookup_policy":
             # First find customer using flexible phone pattern
