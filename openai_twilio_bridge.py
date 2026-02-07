@@ -470,6 +470,7 @@ class OpenAITwilioBridge:
         self.caller_phone: Optional[str] = None
         self._running = False
         self._user_interrupted = False
+        self._response_active = False  # Track if OpenAI is currently generating
     
     async def connect_openai(self) -> bool:
         """Connect to OpenAI Realtime WebSocket."""
@@ -506,9 +507,8 @@ class OpenAITwilioBridge:
                         "silence_duration_ms": 500,
                         "create_response": True
                     },
-                    # TODO: Debug MongoDB function calling - disabled for now
-                    # "tools": TOOLS,
-                    # "tool_choice": "auto"
+                    "tools": TOOLS,
+                    "tool_choice": "auto"
                 }
             }
             await self.openai_ws.send(json.dumps(session_config))
@@ -571,25 +571,34 @@ class OpenAITwilioBridge:
             logger.info("OpenAI session updated")
         
         elif event_type == "input_audio_buffer.speech_started":
-            logger.info("User interrupted - canceling response")
             self._user_interrupted = True
             
-            if self.openai_ws:
+            # Only cancel if there's actually an active response
+            if self._response_active and self.openai_ws:
+                logger.info("User interrupted - canceling active response")
                 await self.openai_ws.send(json.dumps({"type": "response.cancel"}))
             
-            if self.stream_sid:
-                await asyncio.sleep(0.15)
-                clear_msg = {
-                    "event": "clear",
-                    "streamSid": self.stream_sid
-                }
-                await self.twilio_ws.send_json(clear_msg)
+                if self.stream_sid:
+                    await asyncio.sleep(0.15)
+                    clear_msg = {
+                        "event": "clear",
+                        "streamSid": self.stream_sid
+                    }
+                    await self.twilio_ws.send_json(clear_msg)
+            else:
+                logger.info("User speaking (no active response to cancel)")
         
         elif event_type == "input_audio_buffer.speech_stopped":
             logger.info("User stopped speaking")
             
         elif event_type == "response.created":
             self._user_interrupted = False
+            self._response_active = True
+            logger.info("Response started")
+        
+        elif event_type in ("response.done", "response.cancelled"):
+            self._response_active = False
+            logger.info(f"Response ended: {event_type}")
             
         elif event_type in ("response.audio.delta", "response.output_audio.delta"):
             if self._user_interrupted:
@@ -624,6 +633,7 @@ class OpenAITwilioBridge:
             result = await execute_function(name, args, self.caller_phone or "unknown")
             
             # Send the result back to OpenAI
+            logger.info(f"Function result: {result[:200]}...")
             function_output = {
                 "type": "conversation.item.create",
                 "item": {
@@ -633,6 +643,7 @@ class OpenAITwilioBridge:
                 }
             }
             await self.openai_ws.send(json.dumps(function_output))
+            logger.info("Sent function output, triggering response...")
             
             # Trigger response generation with the function result
             await self.openai_ws.send(json.dumps({"type": "response.create"}))
