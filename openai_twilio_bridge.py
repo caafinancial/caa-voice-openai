@@ -322,8 +322,8 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
     normalized_phone = phone_to_use.replace("+1", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
     
     # Create a flexible regex pattern that matches phone with any formatting
-    # e.g., "3033177032" becomes "3.?0.?3.?3.?1.?7.?7.?0.?3.?2"
-    phone_pattern = ".?".join(list(normalized_phone)) if normalized_phone and normalized_phone != "unknown" else None
+    # e.g., "3033177032" becomes "3.*0.*3.*3.*1.*7.*7.*0.*3.*2" to match "(303) 317-7032"
+    phone_pattern = ".*".join(list(normalized_phone)) if normalized_phone and normalized_phone != "unknown" else None
     logger.info(f"Phone lookup pattern: {phone_pattern} (from {phone_to_use})")
     
     if db is None:
