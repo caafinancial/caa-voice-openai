@@ -88,7 +88,8 @@ class OpenAITwilioBridge:
         """Connect to OpenAI Realtime WebSocket."""
         try:
             headers = [
-                ("Authorization", f"Bearer {OPENAI_API_KEY}")
+                ("Authorization", f"Bearer {OPENAI_API_KEY}"),
+                ("OpenAI-Beta", "realtime=v1")  # Keep beta for compatibility
             ]
             
             self.openai_ws = await websockets.connect(
@@ -99,32 +100,24 @@ class OpenAITwilioBridge:
             )
             logger.info("Connected to OpenAI Realtime API")
             
-            # Configure the session (GA API format)
+            # Configure the session (beta format with gpt-realtime model)
             session_config = {
                 "type": "session.update",
                 "session": {
-                    "type": "realtime",
-                    "model": "gpt-realtime",
-                    "output_modalities": ["audio"],
+                    "modalities": ["text", "audio"],
                     "instructions": SYSTEM_PROMPT,
-                    "audio": {
-                        "input": {
-                            "format": {
-                                "type": "g711_ulaw"
-                            },
-                            "turn_detection": {
-                                "type": "semantic_vad"
-                            }
-                        },
-                        "output": {
-                            "format": {
-                                "type": "g711_ulaw"
-                            },
-                            "voice": "marin"
-                        }
-                    },
+                    "voice": "coral",  # marin might not work in beta - coral is safe
+                    "input_audio_format": "g711_ulaw",
+                    "output_audio_format": "g711_ulaw",
                     "input_audio_transcription": {
                         "model": "whisper-1"
+                    },
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.4,
+                        "prefix_padding_ms": 200,
+                        "silence_duration_ms": 500,
+                        "create_response": True
                     }
                 }
             }
@@ -192,8 +185,8 @@ class OpenAITwilioBridge:
                 }
                 await self.twilio_ws.send_json(clear_msg)
         
-        elif event_type == "response.audio.delta":
-            # Forward audio to Twilio
+        elif event_type in ("response.audio.delta", "response.output_audio.delta"):
+            # Forward audio to Twilio (handle both beta and GA event names)
             audio_data = data.get("delta", "")
             if audio_data and self.stream_sid:
                 twilio_msg = {
@@ -205,7 +198,7 @@ class OpenAITwilioBridge:
                 }
                 await self.twilio_ws.send_json(twilio_msg)
                 
-        elif event_type == "response.audio_transcript.delta":
+        elif event_type in ("response.audio_transcript.delta", "response.output_audio_transcript.delta"):
             transcript = data.get("delta", "")
             if transcript:
                 logger.info(f"Assistant: {transcript}")
