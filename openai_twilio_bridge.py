@@ -506,8 +506,9 @@ class OpenAITwilioBridge:
                         "silence_duration_ms": 500,
                         "create_response": True
                     },
-                    "tools": TOOLS,
-                    "tool_choice": "auto"
+                    # TODO: Debug MongoDB function calling - disabled for now
+                    # "tools": TOOLS,
+                    # "tool_choice": "auto"
                 }
             }
             await self.openai_ws.send(json.dumps(session_config))
