@@ -318,6 +318,11 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
     # Normalize phone number (remove +1, spaces, dashes)
     normalized_phone = caller_phone.replace("+1", "").replace("-", "").replace(" ", "").replace("(", "").replace(")", "")
     
+    # Create a flexible regex pattern that matches phone with any formatting
+    # e.g., "3033177032" becomes "3.?0.?3.?3.?1.?7.?7.?0.?3.?2"
+    phone_pattern = ".?".join(list(normalized_phone)) if normalized_phone and normalized_phone != "unknown" else None
+    logger.info(f"Phone lookup pattern: {phone_pattern} (from {caller_phone})")
+    
     if db is None:
         # Return mock data if no database
         return json.dumps({
@@ -335,12 +340,15 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
     
     try:
         if name == "lookup_customer":
-            # Look up customer by phone
+            # Look up customer by phone using flexible pattern
+            if not phone_pattern:
+                return json.dumps({"status": "error", "message": "No phone number available for lookup"})
+            
             customer = await db.customers.find_one({
                 "$or": [
-                    {"phone": {"$regex": normalized_phone}},
-                    {"mobile": {"$regex": normalized_phone}},
-                    {"phones": {"$elemMatch": {"$regex": normalized_phone}}}
+                    {"phone": {"$regex": phone_pattern, "$options": "i"}},
+                    {"mobile": {"$regex": phone_pattern, "$options": "i"}},
+                    {"phones": {"$elemMatch": {"$regex": phone_pattern, "$options": "i"}}}
                 ]
             })
             if customer:
@@ -352,11 +360,14 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
             return json.dumps({"status": "not_found", "message": "No customer found with this phone number"})
             
         elif name == "lookup_policy":
-            # First find customer
+            # First find customer using flexible phone pattern
+            if not phone_pattern:
+                return json.dumps({"status": "error", "message": "No phone number available for lookup"})
+            
             customer = await db.customers.find_one({
                 "$or": [
-                    {"phone": {"$regex": normalized_phone}},
-                    {"mobile": {"$regex": normalized_phone}}
+                    {"phone": {"$regex": phone_pattern, "$options": "i"}},
+                    {"mobile": {"$regex": phone_pattern, "$options": "i"}}
                 ]
             })
             if not customer:
@@ -403,10 +414,13 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
             
         elif name == "get_account_summary":
             # Use pre-computed customer_summaries for fast lookup
+            if not phone_pattern:
+                return json.dumps({"status": "error", "message": "No phone number available for lookup"})
+            
             customer = await db.customers.find_one({
                 "$or": [
-                    {"phone": {"$regex": normalized_phone}},
-                    {"mobile": {"$regex": normalized_phone}}
+                    {"phone": {"$regex": phone_pattern, "$options": "i"}},
+                    {"mobile": {"$regex": phone_pattern, "$options": "i"}}
                 ]
             })
             if not customer:
