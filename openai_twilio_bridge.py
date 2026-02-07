@@ -595,14 +595,13 @@ class OpenAITwilioBridge:
                 return
             audio_data = data.get("delta", "")
             if audio_data and self.stream_sid:
-                # Mix in subtle call center background noise
-                mixed_audio = mix_audio_with_background(audio_data, background_noise)
-                
+                # Background noise disabled for now - synthetic noise sounded bad
+                # and only played during speech (not constant). TODO: use real ambient audio file
                 twilio_msg = {
                     "event": "media",
                     "streamSid": self.stream_sid,
                     "media": {
-                        "payload": mixed_audio
+                        "payload": audio_data
                     }
                 }
                 await self.twilio_ws.send_json(twilio_msg)
