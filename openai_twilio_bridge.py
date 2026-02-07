@@ -197,7 +197,7 @@ TOOLS = [
     {
         "type": "function",
         "name": "lookup_customer",
-        "description": "Look up customer information by phone number. Use this when the caller asks about their account, policies, or personal information.",
+        "description": "Look up customer information by phone number. Use this when the caller asks about their account or personal information.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -212,7 +212,7 @@ TOOLS = [
     {
         "type": "function",
         "name": "lookup_policy",
-        "description": "Look up policy details including coverage, deductibles, premiums, and dates. Use when caller asks about their policy, coverage, deductible, premium, or payment.",
+        "description": "Look up policy details including coverage, deductibles, premiums, and dates. Use when caller asks about their policy, coverage, deductible, premium, or next payment.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -231,23 +231,8 @@ TOOLS = [
     },
     {
         "type": "function",
-        "name": "lookup_claims",
-        "description": "Look up claims history and status for a customer. Use when caller asks about claims, accidents, or claim status.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "claim_number": {
-                    "type": "string",
-                    "description": "Specific claim number if known"
-                }
-            },
-            "required": []
-        }
-    },
-    {
-        "type": "function",
-        "name": "get_payment_info",
-        "description": "Get payment information, billing history, and next payment due. Use when caller asks about payments, bills, or amounts due.",
+        "name": "get_account_summary",
+        "description": "Get a quick summary of the customer's account - active policies, total premium, pending tasks. Use for general account questions.",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -282,7 +267,8 @@ WHAT TO DO:
 
 TOOLS - USE THEM:
 - You have access to the customer database. USE your tools to look up real information!
-- When someone asks about their policy, deductible, payment, etc - use lookup_policy or get_payment_info
+- lookup_policy: coverage, deductibles, premiums, policy dates
+- get_account_summary: quick overview of their account and active policies
 - Say "let me pull that up..." or "one sec, checking your account..." while you look things up
 - If you can't find info, be honest: "hmm, I'm not seeing that in your file..."
 
@@ -376,8 +362,10 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
             if not customer:
                 return json.dumps({"status": "not_found", "message": "Customer not found"})
             
+            customer_id = customer.get("_id")
+            
             # Look up policies
-            query = {"customer_id": customer.get("_id")}
+            query = {"customer_id": customer_id}
             policy_type = args.get("policy_type", "any")
             if policy_type and policy_type != "any":
                 query["type"] = policy_type
@@ -385,15 +373,36 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
                 query["policy_number"] = args["policy_number"]
                 
             policies = await db.policies.find(query).to_list(10)
-            for p in policies:
-                p["_id"] = str(p["_id"])
-                p.pop("customer_id", None)
             
-            if policies:
-                return json.dumps({"status": "found", "policies": policies})
+            # Enrich with policy_details (has coverage/deductible info)
+            enriched = []
+            for p in policies:
+                policy_id = str(p["_id"])
+                p["_id"] = policy_id
+                p.pop("customer_id", None)
+                
+                # Try to get detailed coverage info
+                details = await db.policy_details.find_one({"policy_id": policy_id})
+                if details and details.get("policy_data"):
+                    pd = details["policy_data"]
+                    p["coverage_details"] = {
+                        "total_premium": pd.get("total_premium"),
+                        "current_premium": pd.get("current_premium"),
+                        "policy_period": pd.get("policy_period"),
+                        "bodily_injury": pd.get("policy_level_coverages", {}).get("bodily_injury", {}).get("limit"),
+                        "property_damage": pd.get("policy_level_coverages", {}).get("property_damage", {}).get("limit"),
+                        "uninsured_motorist": pd.get("policy_level_coverages", {}).get("uninsured_motorist", {}).get("limit"),
+                        "comprehensive_deductible": pd.get("vehicle_coverages", [{}])[0].get("comprehensive", {}).get("deductible") if pd.get("vehicle_coverages") else None,
+                        "collision_deductible": pd.get("vehicle_coverages", [{}])[0].get("collision", {}).get("deductible") if pd.get("vehicle_coverages") else None,
+                    }
+                enriched.append(p)
+            
+            if enriched:
+                return json.dumps({"status": "found", "policies": enriched}, default=str)
             return json.dumps({"status": "not_found", "message": "No policies found"})
             
-        elif name == "lookup_claims":
+        elif name == "get_account_summary":
+            # Use pre-computed customer_summaries for fast lookup
             customer = await db.customers.find_one({
                 "$or": [
                     {"phone": {"$regex": normalized_phone}},
@@ -403,52 +412,28 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
             if not customer:
                 return json.dumps({"status": "not_found", "message": "Customer not found"})
             
-            query = {"customer_id": customer.get("_id")}
-            if args.get("claim_number"):
-                query["claim_number"] = args["claim_number"]
-                
-            claims = await db.claims.find(query).sort("date", -1).to_list(5)
-            for c in claims:
-                c["_id"] = str(c["_id"])
-                c.pop("customer_id", None)
+            customer_id = customer.get("_id")
             
-            if claims:
-                return json.dumps({"status": "found", "claims": claims})
-            return json.dumps({"status": "not_found", "message": "No claims found"})
+            # Try customer_summaries first (fast, pre-computed)
+            summary = await db.customer_summaries.find_one({"customer_id": str(customer_id)})
+            if summary:
+                summary.pop("_id", None)
+                return json.dumps({"status": "found", "summary": summary})
             
-        elif name == "get_payment_info":
-            customer = await db.customers.find_one({
-                "$or": [
-                    {"phone": {"$regex": normalized_phone}},
-                    {"mobile": {"$regex": normalized_phone}}
-                ]
-            })
-            if not customer:
-                return json.dumps({"status": "not_found", "message": "Customer not found"})
+            # Fallback: compute summary
+            active_policies = await db.policies.find(
+                {"customer_id": customer_id, "status": "active"}
+            ).to_list(20)
             
-            # Get billing/payment info
-            payments = await db.payments.find(
-                {"customer_id": customer.get("_id")}
-            ).sort("date", -1).to_list(5)
-            
-            for p in payments:
-                p["_id"] = str(p["_id"])
-                p.pop("customer_id", None)
-            
-            # Get next due
-            policies = await db.policies.find(
-                {"customer_id": customer.get("_id"), "status": "active"}
-            ).to_list(10)
+            total_premium = sum(float(p.get("premium", 0) or 0) for p in active_policies)
             
             result = {
                 "status": "found",
-                "recent_payments": payments,
-                "active_policies": len(policies),
+                "customer_name": customer.get("name"),
+                "active_policies": len(active_policies),
+                "total_annual_premium": f"${total_premium:.2f}",
+                "policy_types": list(set(p.get("type", "Unknown") for p in active_policies))
             }
-            if policies:
-                result["next_due"] = policies[0].get("next_payment_date", "Unknown")
-                result["amount_due"] = policies[0].get("premium", "Unknown")
-                
             return json.dumps(result)
             
         else:
