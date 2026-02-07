@@ -69,14 +69,14 @@ class OpenAITwilioBridge:
     async def connect_openai(self) -> bool:
         """Connect to OpenAI Realtime WebSocket."""
         try:
-            headers = {
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "OpenAI-Beta": "realtime=v1"
-            }
+            headers = [
+                ("Authorization", f"Bearer {OPENAI_API_KEY}"),
+                ("OpenAI-Beta", "realtime=v1")
+            ]
             
             self.openai_ws = await websockets.connect(
                 OPENAI_WS_URL,
-                additional_headers=headers,
+                extra_headers=headers,
                 ping_interval=20,
                 ping_timeout=20,
             )
