@@ -197,13 +197,17 @@ TOOLS = [
     {
         "type": "function",
         "name": "lookup_customer",
-        "description": "Look up customer information by phone number. Use this when the caller asks about their account or personal information.",
+        "description": "Look up customer information by phone number or name. Use this when the caller asks about their account or personal information.",
         "parameters": {
             "type": "object",
             "properties": {
                 "phone": {
                     "type": "string",
-                    "description": "The caller's phone number (will use current caller's number if not specified)"
+                    "description": "The caller's phone number"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "The caller's name (first and/or last)"
                 }
             },
             "required": []
@@ -343,17 +347,24 @@ async def execute_function(name: str, args: Dict[str, Any], caller_phone: str) -
     
     try:
         if name == "lookup_customer":
-            # Look up customer by phone using flexible pattern
-            if not phone_pattern:
-                return json.dumps({"status": "error", "message": "No phone number available for lookup"})
+            # Look up customer by phone or name
+            customer = None
             
-            customer = await db.customers.find_one({
-                "$or": [
-                    {"phone": {"$regex": phone_pattern, "$options": "i"}},
-                    {"mobile": {"$regex": phone_pattern, "$options": "i"}},
-                    {"phones": {"$elemMatch": {"$regex": phone_pattern, "$options": "i"}}}
-                ]
-            })
+            # Try phone lookup first if we have a pattern
+            if phone_pattern:
+                customer = await db.customers.find_one({
+                    "$or": [
+                        {"phone": {"$regex": phone_pattern, "$options": "i"}},
+                        {"mobile": {"$regex": phone_pattern, "$options": "i"}}
+                    ]
+                })
+            
+            # Try by name if phone didn't work and name was provided
+            if not customer and args.get("name"):
+                name_query = args.get("name")
+                customer = await db.customers.find_one({
+                    "name": {"$regex": name_query, "$options": "i"}
+                })
             if customer:
                 # Remove sensitive fields
                 customer.pop("_id", None)
