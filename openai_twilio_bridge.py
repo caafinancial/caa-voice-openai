@@ -532,6 +532,7 @@ class OpenAITwilioBridge:
         self._running = False
         self._user_interrupted = False
         self._response_active = False  # Track if OpenAI is currently generating
+        self._greeting_mode = True  # Disable VAD until greeting completes
     
     async def connect_openai(self) -> bool:
         """Connect to OpenAI Realtime WebSocket."""
@@ -549,7 +550,7 @@ class OpenAITwilioBridge:
             )
             logger.info("Connected to OpenAI Realtime API")
             
-            # Configure the session with tools
+            # Configure the session with tools - VAD disabled initially for clean greeting
             session_config = {
                 "type": "session.update",
                 "session": {
@@ -561,19 +562,13 @@ class OpenAITwilioBridge:
                     "input_audio_transcription": {
                         "model": "whisper-1"
                     },
-                    "turn_detection": {
-                        "type": "server_vad",
-                        "threshold": 0.3,
-                        "prefix_padding_ms": 100,
-                        "silence_duration_ms": 200,
-                        "create_response": True
-                    },
+                    "turn_detection": None,  # Disabled until greeting completes
                     "tools": TOOLS,
                     "tool_choice": "auto"
                 }
             }
             await self.openai_ws.send(json.dumps(session_config))
-            logger.info("Sent session config with tools to OpenAI")
+            logger.info("Sent session config (VAD disabled for greeting)")
             
             return True
         except Exception as e:
@@ -601,30 +596,17 @@ class OpenAITwilioBridge:
             )
             logger.info(f"Twilio stream started: {self.stream_sid}, caller: {self.caller_phone}")
             
-            # Send initial greeting directly as assistant message (avoids VAD cutoff)
-            # First, inject context about the caller
-            context = {
-                "type": "conversation.item.create",
-                "item": {
-                    "type": "message",
-                    "role": "system",
-                    "content": [{
-                        "type": "input_text", 
-                        "text": f"Caller connected from {self.caller_phone}. You can use tools to look up their account."
-                    }]
-                }
-            }
-            # Then send the exact greeting we want spoken
+            # Send initial greeting (VAD is disabled, so it won't get cut off)
             greeting = {
                 "type": "response.create",
                 "response": {
                     "modalities": ["text", "audio"],
-                    "instructions": "Say exactly this greeting, nothing more: 'Thank you for calling CAA Financial. This is Samantha speaking on a recorded line. How can I help?'"
+                    "instructions": f"Caller from {self.caller_phone}. Say exactly: 'Thank you for calling CAA Financial. This is Samantha speaking on a recorded line. How can I help?' - nothing more, nothing less."
                 }
             }
             if self.openai_ws:
-                await self.openai_ws.send(json.dumps(context))
                 await self.openai_ws.send(json.dumps(greeting))
+                logger.info("Sent greeting request (VAD disabled)")
             
         elif event_type == "media":
             audio_data = data["media"]["payload"]
@@ -682,6 +664,24 @@ class OpenAITwilioBridge:
             self._response_active = False
             if event_type in ("response.done", "response.cancelled"):
                 logger.info(f"Response ended: {event_type}")
+                
+                # Re-enable VAD after greeting completes
+                if self._greeting_mode and self.openai_ws:
+                    self._greeting_mode = False
+                    enable_vad = {
+                        "type": "session.update",
+                        "session": {
+                            "turn_detection": {
+                                "type": "server_vad",
+                                "threshold": 0.3,
+                                "prefix_padding_ms": 100,
+                                "silence_duration_ms": 200,
+                                "create_response": True
+                            }
+                        }
+                    }
+                    await self.openai_ws.send(json.dumps(enable_vad))
+                    logger.info("Greeting complete - VAD re-enabled")
             
         elif event_type in ("response.audio.delta", "response.output_audio.delta"):
             # Mark that we're actively sending audio
