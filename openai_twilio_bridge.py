@@ -601,21 +601,30 @@ class OpenAITwilioBridge:
             )
             logger.info(f"Twilio stream started: {self.stream_sid}, caller: {self.caller_phone}")
             
-            # Send initial greeting with caller context
-            greeting = {
+            # Send initial greeting directly as assistant message (avoids VAD cutoff)
+            # First, inject context about the caller
+            context = {
                 "type": "conversation.item.create",
                 "item": {
                     "type": "message",
-                    "role": "user",
+                    "role": "system",
                     "content": [{
                         "type": "input_text", 
-                        "text": f"A caller just connected from phone number {self.caller_phone}. Answer with EXACTLY: 'Thank you for calling CAA Financial. This is Samantha speaking on a recorded line. How can I help?' Then wait for their response."
+                        "text": f"Caller connected from {self.caller_phone}. You can use tools to look up their account."
                     }]
                 }
             }
+            # Then send the exact greeting we want spoken
+            greeting = {
+                "type": "response.create",
+                "response": {
+                    "modalities": ["text", "audio"],
+                    "instructions": "Say exactly this greeting, nothing more: 'Thank you for calling CAA Financial. This is Samantha speaking on a recorded line. How can I help?'"
+                }
+            }
             if self.openai_ws:
+                await self.openai_ws.send(json.dumps(context))
                 await self.openai_ws.send(json.dumps(greeting))
-                await self.openai_ws.send(json.dumps({"type": "response.create"}))
             
         elif event_type == "media":
             audio_data = data["media"]["payload"]
