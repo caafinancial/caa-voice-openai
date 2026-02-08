@@ -254,8 +254,8 @@ TOOLS = [
     }
 ]
 
-# System prompt for Sarah
-SYSTEM_PROMPT = """You are Sarah, a friendly voice assistant at CAA Financial. You're helpful but you're NOT an expert who knows everything instantly.
+# System prompt for Samantha
+SYSTEM_PROMPT = """You are Samantha, a friendly voice assistant at CAA Financial. You're helpful but you're NOT an expert who knows everything instantly.
 
 SECURITY - VERIFY BEFORE SHARING ACCOUNT INFO:
 1. When caller gives their NAME → call lookup_customer to find them
@@ -609,7 +609,7 @@ class OpenAITwilioBridge:
                     "role": "user",
                     "content": [{
                         "type": "input_text", 
-                        "text": f"A caller just connected from phone number {self.caller_phone}. Greet them warmly. You can use your tools to look up their account information if they ask about their policy."
+                        "text": f"A caller just connected from phone number {self.caller_phone}. Answer with EXACTLY: 'Thank you for calling CAA Financial. This is Samantha speaking on a recorded line. How can I help?' Then wait for their response."
                     }]
                 }
             }
